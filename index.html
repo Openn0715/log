@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>全方位紀錄系統 V27 專業版</title>
+    <title>全方位紀錄系統 V27</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -12,12 +12,11 @@
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
-        body { font-family: 'Noto Sans TC', sans-serif; background-color: #F1F5F9; -webkit-tap-highlight-color: transparent; }
-        .card { background: white; border-radius: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-        .input-field { width: 100%; background: #F8FAFC; border: 1.5px solid #E2E8F0; border-radius: 12px; padding: 12px; font-weight: 700; color: #1E293B; outline: none; transition: all 0.2s; }
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #F8FAFC; -webkit-tap-highlight-color: transparent; }
+        .card { background: white; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); border: 1px solid #F1F5F9; }
+        .input-field { width: 100%; background: #F1F5F9; border: 2px solid transparent; border-radius: 12px; padding: 12px; font-weight: 700; color: #1E293B; outline: none; transition: all 0.2s; }
         .input-field:focus { border-color: #3B82F6; background: white; }
-        .btn-primary { background: #3B82F6; color: white; font-weight: 900; border-radius: 16px; transition: all 0.2s; }
-        .btn-primary:active { transform: scale(0.98); opacity: 0.9; }
+        .btn-status { width: 36px; height: 36px; border-radius: 10px; font-size: 11px; font-weight: 900; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
     </style>
 </head>
@@ -26,36 +25,30 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, serverTimestamp, orderBy } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
 
         const firebaseConfig = JSON.parse(window.__firebase_config || '{"apiKey":"","authDomain":"","projectId":"","storageBucket":"","messagingSenderId":"","appId":""}');
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'v27-pro-restored';
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'v27-final-stable';
         const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        let db = null, auth = null;
+        let db, auth;
         try {
-            if (firebaseConfig.apiKey) {
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-            }
-        } catch (e) { console.error("Firebase Error", e); }
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+        } catch (e) { console.error(e); }
 
-        window.FB_CORE = { 
-            db, auth, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query,
-            serverTimestamp, appId, signInAnonymously, onAuthStateChanged, signInWithCustomToken,
-            initialToken
-        };
-        window.dispatchEvent(new Event('firebase-ready'));
+        window.FB_CORE = { db, auth, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, appId, signInAnonymously, onAuthStateChanged, signInWithCustomToken, initialToken };
+        window.dispatchEvent(new Event('fb-ready'));
     </script>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        const Icon = ({ name, size = 20, className = "" }) => {
+        const Icon = ({ name, size = 18 }) => {
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
-            return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
+            return <i data-lucide={name} style={{ width: size, height: size }}></i>;
         };
 
         const App = () => {
@@ -63,65 +56,55 @@
             const [books, setBooks] = useState([]);
             const [activeBookId, setActiveBookId] = useState(null);
             const [records, setRecords] = useState([]);
-            const [loading, setLoading] = useState(true);
-            
-            // UI 控制
-            const [view, setView] = useState('all'); // all, today, month, range
             const [isMenuOpen, setIsMenuOpen] = useState(false);
             const [showReport, setShowReport] = useState(false);
-            const [isAddingBook, setIsAddingBook] = useState(false);
-            const [isEditing, setIsEditing] = useState(false);
 
             const getToday = () => new Date().toISOString().split('T')[0];
             const [form, setForm] = useState({ date: getToday(), match: '', market: '', gap: '', odds: '', units: 1, status: 'pending' });
 
-            // 1. 登入
+            // 初始化與登入
             useEffect(() => {
                 const fb = window.FB_CORE;
-                if (!fb || !fb.auth) return;
-                const init = async () => {
+                if (!fb.auth) return;
+                const login = async () => {
                     if (fb.initialToken) await fb.signInWithCustomToken(fb.auth, fb.initialToken);
                     else await fb.signInAnonymously(fb.auth);
                 };
-                init();
-                return fb.onAuthStateChanged(fb.auth, (u) => { setUser(u); setLoading(false); });
+                login();
+                return fb.onAuthStateChanged(fb.auth, (u) => setUser(u));
             }, []);
 
-            // 2. 監聽帳簿 & 強制建立預設
+            // 監聽帳簿
             useEffect(() => {
                 if (!user) return;
                 const fb = window.FB_CORE;
-                const booksRef = fb.collection(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'books');
-                return fb.onSnapshot(booksRef, (snap) => {
+                const ref = fb.collection(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'books');
+                return fb.onSnapshot(ref, (snap) => {
                     const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
                     setBooks(list);
                     if (snap.empty) {
-                        fb.addDoc(booksRef, { name: '預設紀錄簿', type: 'sports', unitAmount: '1000', createdAt: fb.serverTimestamp() });
+                        fb.addDoc(ref, { name: '我的紀錄簿', type: 'sports', unitAmount: '1000' });
                     } else if (!activeBookId) {
                         setActiveBookId(list[0].id);
                     }
                 });
             }, [user]);
 
-            // 3. 監聽紀錄
+            // 監聽紀錄
             useEffect(() => {
                 if (!user || !activeBookId) return;
                 const fb = window.FB_CORE;
-                const recsRef = fb.collection(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'records_' + activeBookId);
-                return fb.onSnapshot(recsRef, (snap) => {
+                const ref = fb.collection(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'records_' + activeBookId);
+                return fb.onSnapshot(ref, (snap) => {
                     setRecords(snap.docs.map(d => ({ id: d.id, ...d.data() })));
                 });
             }, [user, activeBookId]);
 
-            const activeBook = useMemo(() => {
-                return books.find(b => b.id === activeBookId) || { name: '載入中...', type: 'sports', unitAmount: '1000' };
-            }, [books, activeBookId]);
+            const activeBook = useMemo(() => books.find(b => b.id === activeBookId) || { name: '帳簿連線中', unitAmount: '1000' }, [books, activeBookId]);
 
-            // 核心功能：計算盈虧
             const calcPL = (r) => {
                 const unit = parseFloat(activeBook.unitAmount) || 0;
                 const uCount = parseFloat(r.units) || 0;
-                if (activeBook.type === 'baccarat') return uCount * unit;
                 if (r.status === 'pending' || r.status === 'push') return 0;
                 const odds = parseFloat(r.odds) || 0;
                 const bet = uCount * unit;
@@ -135,214 +118,142 @@
             };
 
             const stats = useMemo(() => {
-                const filtered = records.filter(r => {
-                    if (view === 'today') return r.date === getToday();
-                    if (view === 'month') return r.date.startsWith(getToday().substring(0, 7));
-                    return true;
-                });
-                const total = filtered.reduce((acc, r) => acc + calcPL(r), 0);
-                const wins = filtered.filter(r => calcPL(r) > 0).length;
-                const losses = filtered.filter(r => calcPL(r) < 0).length;
-                const rate = filtered.length ? (wins / filtered.length * 100).toFixed(1) : 0;
-                return { total, wins, losses, count: filtered.length, rate, list: filtered.sort((a,b)=>b.date.localeCompare(a.date)) };
-            }, [records, view, activeBook]);
+                const total = records.reduce((s, r) => s + calcPL(r), 0);
+                const wins = records.filter(r => calcPL(r) > 0).length;
+                const rate = records.length ? (wins / records.length * 100).toFixed(1) : 0;
+                return { total, rate, count: records.length, list: [...records].sort((a,b)=>b.date.localeCompare(a.date)) };
+            }, [records, activeBook]);
 
-            const handleSave = async (e) => {
+            const submit = async (e) => {
                 e.preventDefault();
                 const fb = window.FB_CORE;
-                const path = ['artifacts', fb.appId, 'users', user.uid, 'records_' + activeBookId];
-                if (isEditing) {
-                    const { id, ...data } = form;
-                    await fb.updateDoc(fb.doc(fb.db, ...path, id), data);
-                    setIsEditing(false);
-                } else {
-                    await fb.addDoc(fb.collection(fb.db, ...path), { ...form, createdAt: fb.serverTimestamp() });
-                }
+                await fb.addDoc(fb.collection(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'records_' + activeBookId), { ...form, createdAt: fb.serverTimestamp() });
                 setForm({ date: getToday(), match: '', market: '', gap: '', odds: '', units: 1, status: 'pending' });
             };
 
-            if (loading) return <div className="h-screen flex items-center justify-center bg-slate-900 text-white font-black italic">V27 RESTORING...</div>;
-
             return (
-                <div className="max-w-md mx-auto min-h-screen flex flex-col pb-10">
-                    {/* Header */}
-                    <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md px-5 py-4 flex justify-between items-center border-b">
+                <div className="max-w-md mx-auto min-h-screen flex flex-col pb-20">
+                    <header className="bg-white/80 backdrop-blur-md sticky top-0 z-50 p-4 border-b flex justify-between items-center">
                         <button onClick={() => setIsMenuOpen(true)} className="p-2 text-slate-400"><Icon name="menu"/></button>
                         <div className="text-center">
-                            <h1 className="text-sm font-black text-slate-800">{activeBook.name}</h1>
-                            <div className="text-[9px] font-bold text-blue-500 uppercase tracking-widest">[ CLOUD SYNCED ]</div>
+                            <div className="text-xs font-black text-slate-800">{activeBook.name}</div>
+                            <div className="text-[8px] font-bold text-blue-500 uppercase">V27 Professional</div>
                         </div>
-                        <button onClick={() => setShowReport(true)} className="p-2 text-slate-800 bg-slate-100 rounded-xl"><Icon name="file-text"/></button>
+                        <button onClick={() => setShowReport(true)} className="p-2 text-slate-800"><Icon name="bar-chart-2"/></button>
                     </header>
 
-                    <div className="p-4 space-y-4">
-                        {/* 數據面板 */}
-                        <div className="grid grid-cols-4 gap-2">
-                            {[
-                                { label: '盈虧', val: Math.round(stats.total), color: stats.total >= 0 ? 'text-green-500' : 'text-red-500' },
-                                { label: '勝率', val: stats.rate + '%', color: 'text-blue-500' },
-                                { label: '勝/敗', val: `${stats.wins}/${stats.losses}`, color: 'text-slate-700' },
-                                { label: '總場次', val: stats.count, color: 'text-slate-800' }
-                            ].map((s, i) => (
-                                <div key={i} className="card p-3 text-center">
-                                    <div className="text-[9px] font-bold text-slate-400 mb-1">{s.label}</div>
-                                    <div className={`text-[13px] font-black ${s.color}`}>{s.val}</div>
-                                </div>
-                            ))}
-                        </div>
-
-                        {/* 篩選分頁 */}
-                        <div className="flex bg-slate-200 p-1 rounded-2xl">
-                            {['all', 'today', 'month', 'range'].map(v => (
-                                <button key={v} onClick={() => setView(v)} className={`flex-1 py-2 text-[11px] font-black rounded-xl transition-all ${view === v ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-500'}`}>
-                                    {v === 'all' ? '全部' : v === 'today' ? '今日' : v === 'month' ? '本月' : '範圍'}
-                                </button>
-                            ))}
-                        </div>
-
-                        {/* 單注金額 */}
-                        <div className="bg-blue-600 p-5 rounded-[2rem] shadow-xl shadow-blue-200 flex justify-between items-center text-white">
-                            <div className="flex items-center gap-3">
-                                <Icon name="trending-up" size={24}/>
-                                <span className="font-black">單注金額：</span>
+                    <main className="p-4 space-y-4">
+                        <div className="grid grid-cols-3 gap-2">
+                            <div className="card p-4 text-center">
+                                <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">盈虧</div>
+                                <div className={`text-sm font-black ${stats.total >= 0 ? 'text-green-500' : 'text-red-500'}`}>{Math.round(stats.total).toLocaleString()}</div>
                             </div>
-                            <div className="flex items-center bg-white/20 rounded-xl px-4 py-2 border border-white/30">
-                                <span className="mr-2 text-sm opacity-70">$</span>
+                            <div className="card p-4 text-center">
+                                <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">勝率</div>
+                                <div className="text-sm font-black text-blue-600">{stats.rate}%</div>
+                            </div>
+                            <div className="card p-4 text-center">
+                                <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">總計</div>
+                                <div className="text-sm font-black text-slate-800">{stats.count}</div>
+                            </div>
+                        </div>
+
+                        <div className="bg-slate-900 p-5 rounded-[2rem] flex justify-between items-center text-white shadow-xl">
+                            <span className="font-black text-xs">單位價值：</span>
+                            <div className="bg-white/10 px-4 py-2 rounded-xl flex items-center border border-white/20">
+                                <span className="text-[10px] opacity-40 mr-2">$</span>
                                 <input type="number" value={activeBook.unitAmount} onChange={async (e) => {
                                     const fb = window.FB_CORE;
                                     await fb.updateDoc(fb.doc(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'books', activeBookId), { unitAmount: e.target.value });
-                                }} className="bg-transparent w-20 text-right outline-none font-black" />
+                                }} className="bg-transparent w-20 text-right font-black outline-none" />
                             </div>
                         </div>
 
-                        {/* 輸入表單 */}
-                        <div className="card p-6 space-y-4">
-                            <div className="bg-slate-50 text-center py-2 rounded-xl text-sm font-black text-slate-500 tracking-widest uppercase">{form.date}</div>
-                            <form className="space-y-3" onSubmit={handleSave}>
-                                <input placeholder="比賽項目" value={form.match} onChange={e => setForm({...form, match: e.target.value})} className="input-field" required />
-                                <div className="grid grid-cols-2 gap-3">
-                                    <input placeholder="盤口" value={form.market} onChange={e => setForm({...form, market: e.target.value})} className="input-field" />
-                                    <input placeholder="分洞" value={form.gap} onChange={e => setForm({...form, gap: e.target.value})} className="input-field" />
-                                </div>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="relative">
-                                        <input type="number" step="0.001" placeholder="賠率" value={form.odds} onChange={e => setForm({...form, odds: e.target.value})} className="input-field bg-blue-50/50" required />
-                                    </div>
-                                    <div className="relative">
-                                        <input type="number" step="0.1" placeholder="注數" value={form.units} onChange={e => setForm({...form, units: e.target.value})} className="input-field bg-blue-50/50" required />
-                                    </div>
-                                </div>
-                                <button type="submit" className="w-full py-4 btn-primary shadow-lg shadow-blue-100 uppercase tracking-widest">
-                                    {isEditing ? '更新雲端紀錄' : '寫入雲端紀錄'}
-                                </button>
-                                {isEditing && <button type="button" onClick={() => {setIsEditing(false); setForm({date:getToday(),match:'',market:'',gap:'',odds:'',units:1,status:'pending'});}} className="w-full text-xs font-bold text-slate-400 py-2">取消編輯</button>}
-                            </form>
+                        <div className="card p-6 space-y-3">
+                            <input type="date" value={form.date} onChange={e=>setForm({...form, date:e.target.value})} className="input-field" />
+                            <input placeholder="比賽名稱 / 隊伍" value={form.match} onChange={e=>setForm({...form, match:e.target.value})} className="input-field" required />
+                            <div className="grid grid-cols-2 gap-2">
+                                <input placeholder="盤口" value={form.market} onChange={e=>setForm({...form, market:e.target.value})} className="input-field" />
+                                <input placeholder="分洞 (+贏半)" value={form.gap} onChange={e=>setForm({...form, gap:e.target.value})} className="input-field" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <input type="number" step="0.001" placeholder="賠率" value={form.odds} onChange={e=>setForm({...form, odds:e.target.value})} className="input-field" required />
+                                <input type="number" step="0.1" placeholder="注數" value={form.units} onChange={e=>setForm({...form, units:e.target.value})} className="input-field" required />
+                            </div>
+                            <button onClick={submit} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-lg">儲存至雲端</button>
                         </div>
 
-                        {/* 紀錄列表 */}
                         <div className="space-y-2">
-                            {stats.list.map(r => {
-                                const pl = calcPL(r);
-                                return (
-                                    <div key={r.id} className="card p-4 flex items-center justify-between group relative overflow-hidden">
-                                        <div className="flex-1">
-                                            <div className="text-xs font-black text-slate-800">{r.match}</div>
-                                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">
-                                                {r.date} | {r.market} @{r.odds} ({r.units}注)
-                                            </div>
-                                        </div>
-                                        <div className="flex gap-1 mr-4">
-                                            {['win', 'loss', 'push', 'half'].map(s => (
-                                                <button key={s} onClick={async () => {
-                                                    const fb = window.FB_CORE;
-                                                    await fb.updateDoc(fb.doc(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'records_'+activeBookId, r.id), { status: s });
-                                                }} className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-black transition-all ${r.status === s ? 'bg-slate-800 text-white shadow-md' : 'bg-slate-50 text-slate-300'}`}>
-                                                    {s === 'win' ? '贏' : s === 'loss' ? '輸' : s === 'push' ? '走' : '半'}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <div className={`text-right font-black text-sm min-w-[60px] ${pl > 0 ? 'text-green-500' : pl < 0 ? 'text-red-500' : 'text-slate-300'}`}>
-                                            {pl !== 0 ? (pl > 0 ? '+' : '') + Math.round(pl).toLocaleString() : '等'}
-                                        </div>
-
-                                        {/* 懸浮按鈕 */}
-                                        <div className="absolute right-0 inset-y-0 flex items-center gap-1 bg-white/90 px-2 opacity-0 group-hover:opacity-100 transition-opacity border-l">
-                                            <button onClick={() => { setForm(r); setIsEditing(true); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="p-2 text-blue-500"><Icon name="edit-2" size={16}/></button>
-                                            <button onClick={async () => { if(confirm("確定刪除？")) await window.FB_CORE.deleteDoc(window.FB_CORE.doc(window.FB_CORE.db, 'artifacts', window.FB_CORE.appId, 'users', user.uid, 'records_'+activeBookId, r.id)); }} className="p-2 text-red-500"><Icon name="trash-2" size={16}/></button>
-                                        </div>
+                            {stats.list.map(r => (
+                                <div key={r.id} className="card p-4 flex items-center justify-between group">
+                                    <div className="flex-1">
+                                        <div className="text-xs font-black text-slate-800">{r.match}</div>
+                                        <div className="text-[9px] font-bold text-slate-400">{r.date} | {r.market} @{r.odds}</div>
                                     </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-
-                    {/* 報表彈窗 */}
-                    {showReport && (
-                        <div className="fixed inset-0 bg-white z-[100] p-6 overflow-y-auto animate-slide-up no-scrollbar">
-                            <button onClick={() => setShowReport(false)} className="mb-6 flex items-center gap-2 text-slate-400 font-black"><Icon name="chevron-left"/> 返回</button>
-                            <div className="bg-slate-900 text-white p-8 rounded-[2.5rem] shadow-2xl mb-8">
-                                <h2 className="text-xl font-black mb-1">{activeBook.name}</h2>
-                                <div className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-8">Full Analysis</div>
-                                <div className="grid grid-cols-2 gap-8">
-                                    <div>
-                                        <div className="text-[8px] opacity-40 uppercase mb-1">Total P/L</div>
-                                        <div className={`text-2xl font-black ${stats.total >= 0 ? 'text-green-400' : 'text-red-400'}`}>${Math.round(stats.total).toLocaleString()}</div>
+                                    <div className="flex gap-1 mr-4">
+                                        {['win', 'loss', 'push', 'half'].map(st => (
+                                            <button key={st} onClick={async () => {
+                                                const fb = window.FB_CORE;
+                                                await fb.updateDoc(fb.doc(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'records_'+activeBookId, r.id), { status: st });
+                                            }} className={`btn-status ${r.status === st ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-300'}`}>
+                                                {st === 'win' ? '贏' : st === 'loss' ? '輸' : st === 'push' ? '走' : '半'}
+                                            </button>
+                                        ))}
                                     </div>
-                                    <div>
-                                        <div className="text-[8px] opacity-40 uppercase mb-1">Win Rate</div>
-                                        <div className="text-2xl font-black text-yellow-400">{stats.rate}%</div>
+                                    <div className={`text-right font-black text-xs min-w-[50px] ${calcPL(r) > 0 ? 'text-green-500' : calcPL(r) < 0 ? 'text-red-500' : 'text-slate-300'}`}>
+                                        {Math.round(calcPL(r)).toLocaleString()}
                                     </div>
+                                    <button onClick={async () => { if(confirm("刪除？")) await window.FB_CORE.deleteDoc(window.FB_CORE.doc(window.FB_CORE.db, 'artifacts', window.FB_CORE.appId, 'users', user.uid, 'records_'+activeBookId, r.id)); }} className="ml-2 text-slate-200 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="trash-2" size={14}/></button>
                                 </div>
-                            </div>
-                            <div className="space-y-3">
-                                {stats.list.map(r => (
-                                    <div key={r.id} className="flex justify-between items-center py-3 border-b text-xs font-bold">
-                                        <div>
-                                            <div className="text-slate-800">{r.match}</div>
-                                            <div className="text-[9px] text-slate-400">{r.date} | {r.status.toUpperCase()}</div>
-                                        </div>
-                                        <div className={calcPL(r) >= 0 ? 'text-green-600' : 'text-red-600'}>{Math.round(calcPL(r)).toLocaleString()}</div>
-                                    </div>
-                                ))}
-                            </div>
+                            ))}
                         </div>
-                    )}
+                    </main>
 
-                    {/* 側邊菜單 */}
+                    {/* 側選單 */}
                     {isMenuOpen && (
-                        <div className="fixed inset-0 bg-slate-900/60 z-50 flex" onClick={() => setIsMenuOpen(false)}>
-                            <div className="bg-white w-72 h-full p-6 shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-                                <h2 className="font-black text-xl mb-8 flex items-center gap-2"><Icon name="book" className="text-blue-600"/> 帳簿清單</h2>
-                                <div className="flex-1 space-y-2 overflow-y-auto no-scrollbar">
+                        <div className="fixed inset-0 bg-black/50 z-[100] flex" onClick={()=>setIsMenuOpen(false)}>
+                            <div className="bg-white w-64 h-full p-6 flex flex-col" onClick={e=>e.stopPropagation()}>
+                                <h2 className="font-black text-lg mb-6 flex items-center gap-2"><Icon name="book" className="text-blue-600"/> 帳簿清單</h2>
+                                <div className="space-y-2 flex-1 overflow-y-auto no-scrollbar">
                                     {books.map(b => (
-                                        <div key={b.id} onClick={() => { setActiveBookId(b.id); setIsMenuOpen(false); }} className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex justify-between items-center ${activeBookId === b.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-50 text-slate-400 hover:border-slate-200'}`}>
+                                        <div key={b.id} onClick={() => { setActiveBookId(b.id); setIsMenuOpen(false); }} className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${activeBookId === b.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-transparent bg-slate-50 text-slate-400'}`}>
                                             <div className="font-black text-sm">{b.name}</div>
-                                            <button onClick={(e) => { e.stopPropagation(); if(confirm("刪除帳簿會清空其所有紀錄，確定？")) window.FB_CORE.deleteDoc(window.FB_CORE.doc(window.FB_CORE.db, 'artifacts', window.FB_CORE.appId, 'users', user.uid, 'books', b.id)); }} className="text-slate-300 hover:text-red-500"><Icon name="x" size={14}/></button>
                                         </div>
                                     ))}
-                                    <button onClick={() => setIsAddingBook(true)} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-300 font-black text-[10px] uppercase tracking-widest">+ New Book</button>
                                 </div>
-                                <div className="pt-6 border-t mt-auto text-[10px] font-bold text-slate-300 truncate">UID: {user?.uid}</div>
+                                <div className="pt-4 border-t text-[8px] font-bold text-slate-300">UID: {user?.uid}</div>
                             </div>
                         </div>
                     )}
 
-                    {/* 新增帳簿 */}
-                    {isAddingBook && (
-                        <div className="fixed inset-0 bg-slate-900/80 z-[110] flex items-center justify-center p-6 backdrop-blur-md">
-                            <div className="bg-white w-full max-w-xs rounded-[2.5rem] p-8 shadow-2xl">
-                                <h3 className="text-lg font-black mb-6 text-center text-slate-800">建立新帳簿</h3>
-                                <div className="space-y-4">
-                                    <input placeholder="輸入帳簿名稱" className="input-field text-center" id="newBookName" />
-                                    <button onClick={async () => {
-                                        const name = document.getElementById('newBookName').value;
-                                        if(!name || !user) return;
-                                        const fb = window.FB_CORE;
-                                        await fb.addDoc(fb.collection(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'books'), { name, type: 'sports', unitAmount: '1000', createdAt: fb.serverTimestamp() });
-                                        setIsAddingBook(false); setIsMenuOpen(false);
-                                    }} className="w-full py-4 btn-primary text-sm shadow-xl">確認建立</button>
-                                    <button onClick={() => setIsAddingBook(false)} className="w-full text-slate-400 text-[10px] font-black uppercase text-center">取消</button>
+                    {/* 報表介面 */}
+                    {showReport && (
+                        <div className="fixed inset-0 bg-white z-[100] p-6 overflow-y-auto">
+                            <button onClick={()=>setShowReport(false)} className="mb-6 flex items-center gap-2 text-slate-400 font-bold"><Icon name="arrow-left"/> 返回</button>
+                            <div className="bg-slate-900 text-white p-8 rounded-[2rem] shadow-xl mb-6">
+                                <div className="text-[10px] text-blue-400 font-black uppercase mb-2">Total Performance</div>
+                                <div className="text-3xl font-black mb-6">${Math.round(stats.total).toLocaleString()}</div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="bg-white/5 p-4 rounded-2xl">
+                                        <div className="text-[8px] opacity-40 mb-1">WIN RATE</div>
+                                        <div className="font-black text-yellow-400">{stats.rate}%</div>
+                                    </div>
+                                    <div className="bg-white/5 p-4 rounded-2xl">
+                                        <div className="text-[8px] opacity-40 mb-1">GAMES</div>
+                                        <div className="font-black">{stats.count}</div>
+                                    </div>
                                 </div>
+                            </div>
+                            <div className="space-y-2">
+                                {stats.list.map(r => (
+                                    <div key={r.id} className="flex justify-between items-center py-3 border-b">
+                                        <div>
+                                            <div className="text-xs font-black text-slate-800">{r.match}</div>
+                                            <div className="text-[8px] text-slate-400 uppercase">{r.date}</div>
+                                        </div>
+                                        <div className={`text-xs font-black ${calcPL(r) >= 0 ? 'text-green-600' : 'text-red-600'}`}>{Math.round(calcPL(r)).toLocaleString()}</div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     )}
