@@ -1,8 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Trash2, Edit3, Plus, X, Check, 
-  Menu, FileText, ArrowLeft, TrendingUp, Save
+  Menu, FileText, ArrowLeft, TrendingUp, Save, Loader2
 } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, collection, doc, setDoc, getDoc, 
+  onSnapshot, query, addDoc, updateDoc, deleteDoc, 
+  serverTimestamp 
+} from 'firebase/firestore';
+import { 
+  getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged 
+} from 'firebase/auth';
+
+// --- Firebase 配置 (Rule 3) ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'v27-official-cloud';
 
 const App = () => {
   const getLocalDate = () => {
@@ -11,6 +27,8 @@ const App = () => {
   };
 
   // --- 狀態管理 ---
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [isAddingBook, setIsAddingBook] = useState(false);
@@ -32,43 +50,64 @@ const App = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
+  // 1. 初始化身份驗證 (Rule 3)
   useEffect(() => {
-    const savedBooks = localStorage.getItem('suite_v27_books');
-    if (savedBooks) {
-      const parsed = JSON.parse(savedBooks);
-      setBooks(parsed);
-      if (parsed.length > 0) setActiveBookId(parsed[0].id);
-    } else {
-      const def = [{ id: 'def-sports', name: '我的體育紀錄', type: 'sports', unitAmount: '1000' }];
-      setBooks(def);
-      setActiveBookId('def-sports');
-      localStorage.setItem('suite_v27_books', JSON.stringify(def));
-    }
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) { console.error("Auth error", err); }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setLoading(false);
+    });
+    return () => unsubscribe();
   }, []);
 
+  // 2. 獲取帳簿列表 (Rule 1)
   useEffect(() => {
-    if (activeBookId) {
-      const savedRecords = localStorage.getItem(`suite_v27_records_${activeBookId}`);
-      setRecords(savedRecords ? JSON.parse(savedRecords) : []);
+    if (!user) return;
+    const booksRef = collection(db, 'artifacts', appId, 'users', user.uid, 'books');
+    const unsubscribe = onSnapshot(booksRef, (snapshot) => {
+      const bList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      if (bList.length === 0) {
+        // 建立初始預設帳簿
+        addDoc(booksRef, { name: '我的體育紀錄', type: 'sports', unitAmount: '1000', createdAt: serverTimestamp() });
+      } else {
+        setBooks(bList);
+        if (!activeBookId) setActiveBookId(bList[0].id);
+      }
+    }, (err) => console.error("Books snapshot error", err));
+    return () => unsubscribe();
+  }, [user]);
+
+  // 3. 獲取當前帳簿紀錄 (Rule 1 & 2)
+  useEffect(() => {
+    if (!user || !activeBookId) return;
+    const recsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'records_' + activeBookId);
+    const unsubscribe = onSnapshot(recsRef, (snapshot) => {
+      const rList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setRecords(rList);
       setIsEditing(false);
-    }
-  }, [activeBookId]);
+    }, (err) => console.error("Records snapshot error", err));
+    return () => unsubscribe();
+  }, [user, activeBookId]);
 
-  const activeBook = books.find(b => b.id === activeBookId) || { name: '未選擇', type: 'sports', unitAmount: '1000' };
+  const activeBook = useMemo(() => 
+    books.find(b => b.id === activeBookId) || { name: '載入中...', type: 'sports', unitAmount: '1000' }
+  , [books, activeBookId]);
 
-  const handleUnitAmountChange = (newVal) => {
-    const updatedBooks = books.map(b => 
-      b.id === activeBookId ? { ...b, unitAmount: newVal } : b
-    );
-    setBooks(updatedBooks);
-    localStorage.setItem('suite_v27_books', JSON.stringify(updatedBooks));
+  // --- 資料操作替代原本的 LocalStorage ---
+  const handleUnitAmountChange = async (newVal) => {
+    if (!user || !activeBookId) return;
+    const bookRef = doc(db, 'artifacts', appId, 'users', user.uid, 'books', activeBookId);
+    await updateDoc(bookRef, { unitAmount: newVal });
   };
-
-  useEffect(() => {
-    if (activeBookId) {
-      localStorage.setItem(`suite_v27_records_${activeBookId}`, JSON.stringify(records));
-    }
-  }, [records, activeBookId]);
 
   const calculateRecordProfit = (r) => {
     const unitVal = parseFloat(activeBook.unitAmount) || 0;
@@ -81,8 +120,8 @@ const App = () => {
     if (r.status === 'loss') return -betSize;
     if (r.status === 'push') return 0; 
     if (r.status === 'half') {
-      const gVal = parseFloat(r.gap.toString().replace(/[^\d.-]/g, '')) || 50;
-      const isWinHalf = r.gap.toString().includes('+') || parseFloat(r.gap) > 0;
+      const gVal = parseFloat(r.gap?.toString().replace(/[^\d.-]/g, '')) || 50;
+      const isWinHalf = r.gap?.toString().includes('+') || parseFloat(r.gap) > 0;
       const percentage = Math.abs(gVal) / 100;
       return isWinHalf ? (betSize * (odds - 1)) * percentage : -(betSize * percentage);
     }
@@ -96,7 +135,7 @@ const App = () => {
     if (filter === 'month') return r.date.substring(0, 7) === today.substring(0, 7);
     if (filter === 'custom') return r.date >= customRange.start && r.date <= customRange.end;
     return true;
-  }).sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+  }).sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt?.seconds - a.createdAt?.seconds));
 
   const totalProfitSum = filteredData.reduce((s, r) => s + calculateRecordProfit(r), 0);
   const winCount = filteredData.filter(r => calculateRecordProfit(r) > 0).length;
@@ -111,21 +150,18 @@ const App = () => {
     return groups;
   }, {});
 
-  const handleRenameBook = (id) => {
-    if (!tempBookName.trim()) return;
-    const updated = books.map(b => b.id === id ? { ...b, name: tempBookName } : b);
-    setBooks(updated);
-    localStorage.setItem('suite_v27_books', JSON.stringify(updated));
+  const handleRenameBook = async (id) => {
+    if (!tempBookName.trim() || !user) return;
+    const bookRef = doc(db, 'artifacts', appId, 'users', user.uid, 'books', id);
+    await updateDoc(bookRef, { name: tempBookName });
     setEditingBookId(null);
   };
 
-  const handleDeleteBook = (id) => {
-    if (books.length <= 1) return;
-    const updated = books.filter(b => b.id !== id);
-    setBooks(updated);
-    localStorage.setItem('suite_v27_books', JSON.stringify(updated));
-    localStorage.removeItem(`suite_v27_records_${id}`);
-    if (activeBookId === id) setActiveBookId(updated[0].id);
+  const handleDeleteBook = async (id) => {
+    if (books.length <= 1 || !user) return;
+    const bookRef = doc(db, 'artifacts', appId, 'users', user.uid, 'books', id);
+    await deleteDoc(bookRef);
+    if (activeBookId === id) setActiveBookId(null);
   };
 
   // --- 報表視窗 ---
@@ -135,7 +171,6 @@ const App = () => {
                                 filter === 'month' ? `本月 (${getLocalDate().substring(0, 7)})` : 
                                 `${customRange.start} ~ ${customRange.end}`;
 
-    // 根據帳簿類型決定表頭文字
     const dataColumnHeader = activeBook.type === 'sports' ? '賠率' : '注數';
 
     return (
@@ -144,13 +179,10 @@ const App = () => {
           <button onClick={() => setShowReport(false)} className="flex items-center gap-2 text-slate-500 font-black mb-4">
             <ArrowLeft size={20} /> 返回
           </button>
-
           <div className="bg-slate-900 text-white p-5 rounded-[1.5rem] shadow-2xl mb-6">
             <div className="mb-3">
                 <h2 className="text-lg font-black">{activeBook.name}</h2>
-                <p className="text-[10px] text-blue-400 font-bold uppercase mt-1">
-                  【統計時段：{reportDateRangeText}】
-                </p>
+                <p className="text-[10px] text-blue-400 font-bold uppercase mt-1">【統計時段：{reportDateRangeText}】</p>
             </div>
             <div className="grid grid-cols-5 gap-1 pt-3 border-t border-white/10 text-center">
               <StatItem label="盈虧總計" val={Math.round(totalProfitSum).toLocaleString()} color={totalProfitSum >= 0 ? 'text-green-400' : 'text-red-400'} />
@@ -160,7 +192,6 @@ const App = () => {
               <StatItem label="總場次" val={filteredData.length} />
             </div>
           </div>
-
           <div className="space-y-4">
             {Object.entries(groupedData).map(([date, items]) => (
               <div key={date}>
@@ -181,36 +212,23 @@ const App = () => {
                       {items.map(r => {
                         const p = calculateRecordProfit(r);
                         let sText = '';
-                        let dVal = ''; 
-
+                        let dVal = r.odds || r.units;
                         if (activeBook.type === 'baccarat') {
                            sText = r.units > 0 ? '贏' : r.units < 0 ? '輸' : '平';
-                           dVal = r.units; // 內容顯示注數
                         } else {
-                           dVal = r.odds; // 內容顯示賠率
                            if (r.status === 'pending') sText = '未結';
                            else if (r.status === 'push') sText = '走盤';
                            else if (r.status === 'half') {
-                              const gNum = parseFloat(r.gap.toString().replace(/[^\d.-]/g, '')) || 0;
-                              const isWin = r.gap.toString().includes('+') || parseFloat(r.gap) > 0;
-                              sText = `${isWin ? '贏' : '輸'}${Math.abs(gNum)}%`;
-                           } else {
-                              sText = p > 0 ? '贏' : '輸';
-                           }
+                              const isWin = r.gap?.toString().includes('+') || parseFloat(r.gap) > 0;
+                              sText = `${isWin ? '贏' : '輸'}50%`;
+                           } else { sText = p > 0 ? '贏' : '輸'; }
                         }
-
                         return (
                           <tr key={r.id} className="border-b last:border-0 text-[10px]">
                             <td className="px-3 py-1.5 font-bold text-slate-700 truncate">{r.match || '-'}</td>
-                            <td className="px-1 py-1.5 text-center font-bold text-blue-600">
-                               {dVal}
-                            </td>
-                            <td className={`px-1 py-1.5 text-center font-black ${p > 0 ? 'text-green-500' : p < 0 ? 'text-red-500' : 'text-slate-400'}`}>
-                              {sText}
-                            </td>
-                            <td className={`px-3 py-1.5 text-right font-black ${p > 0 ? 'text-green-500' : p < 0 ? 'text-red-500' : 'text-slate-300'}`}>
-                              {Math.round(p).toLocaleString()}
-                            </td>
+                            <td className="px-1 py-1.5 text-center font-bold text-blue-600">{dVal}</td>
+                            <td className={`px-1 py-1.5 text-center font-black ${p > 0 ? 'text-green-500' : p < 0 ? 'text-red-500' : 'text-slate-400'}`}>{sText}</td>
+                            <td className={`px-3 py-1.5 text-right font-black ${p > 0 ? 'text-green-500' : p < 0 ? 'text-red-500' : 'text-slate-300'}`}>{Math.round(p).toLocaleString()}</td>
                           </tr>
                         );
                       })}
@@ -225,8 +243,10 @@ const App = () => {
     );
   };
 
+  if (loading) return <div className="h-screen bg-slate-950 flex items-center justify-center text-white font-black italic">V27 CLOUD INITIALIZING...</div>;
+
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-800 pb-24 font-sans">
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-800 pb-24 font-sans select-none">
       {showReport && <ReportModal />}
       
       {/* 側選單 */}
@@ -234,7 +254,7 @@ const App = () => {
       <div className={`fixed top-0 left-0 h-full w-72 bg-white z-[60] shadow-2xl transition-transform duration-300 ${isMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="p-6 h-full flex flex-col">
           <div className="flex justify-between items-center mb-8">
-            <h2 className="font-black italic text-lg tracking-tight">紀錄簿列表</h2>
+            <h2 className="font-black italic text-lg tracking-tight uppercase">Records List</h2>
             <button onClick={() => setIsAddingBook(true)} className="p-2 bg-blue-600 text-white rounded-xl shadow-lg active:scale-90 transition-transform"><Plus size={20} /></button>
           </div>
           <div className="space-y-3 flex-1 overflow-y-auto pr-1">
@@ -260,6 +280,7 @@ const App = () => {
               </div>
             ))}
           </div>
+          <div className="pt-4 border-t text-[8px] font-black text-slate-300 uppercase tracking-widest text-center">Cloud Sync Version 27</div>
         </div>
       </div>
 
@@ -269,14 +290,13 @@ const App = () => {
           <div className="flex justify-between items-center mb-3">
             <button onClick={() => setIsMenuOpen(true)} className="p-2 -ml-2 text-slate-400"><Menu size={24} /></button>
             <div className="text-center min-w-0 px-4">
-              <h1 className="text-xs font-black text-slate-800 truncate">{activeBook.name}</h1>
+              <h1 className="text-xs font-black text-slate-800 truncate uppercase">{activeBook.name}</h1>
               <div className="text-[7px] font-black text-blue-500 mt-0.5 uppercase tracking-tighter">
                 【 {filter==='all'?'全部顯示':filter==='today'?'當日數據':filter==='month'?'本月統計':`${customRange.start} ~ ${customRange.end}`} 】
               </div>
             </div>
             <button onClick={() => setShowReport(true)} className="p-2 bg-slate-800 text-white rounded-xl shadow-lg active:scale-95 transition-transform"><FileText size={18} /></button>
           </div>
-
           <div className="grid grid-cols-4 gap-1.5">
             <MiniStat label="盈虧總計" val={Math.round(totalProfitSum).toLocaleString()} color={totalProfitSum >= 0 ? 'text-green-600' : 'text-red-600'} />
             <MiniStat label="勝率%" val={`${winRate}%`} color="text-blue-600" />
@@ -323,18 +343,23 @@ const App = () => {
 
         {/* 新增表單 */}
         <div className="bg-white rounded-[1.5rem] shadow-sm border border-slate-100 overflow-hidden mb-6">
-          <form className="p-4 grid grid-cols-12 gap-2" onSubmit={(e) => {
+          <form className="p-4 grid grid-cols-12 gap-2" onSubmit={async (e) => {
             e.preventDefault();
+            if (!user || !activeBookId) return;
             if (activeBook.type === 'sports' && (!form.match || !form.odds)) return;
             if (activeBook.type === 'baccarat' && !form.units) return;
-            if (isEditing) setRecords(prev => prev.map(r => r.id === form.id ? { ...form } : r));
-            else setRecords(prev => [{ ...form, id: Date.now() }, ...prev]);
+
+            const colRef = collection(db, 'artifacts', appId, 'users', user.uid, 'records_' + activeBookId);
+            if (isEditing) {
+              await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'records_' + activeBookId, form.id), { ...form });
+            } else {
+              await addDoc(colRef, { ...form, createdAt: serverTimestamp() });
+            }
             setForm({ date: getLocalDate(), match: '', market: '', gap: '', odds: '', units: 1, id: null, status: 'pending' });
             setIsEditing(false);
           }}>
             <div className="col-span-12"><input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} className="input-field text-[11px]" /></div>
             <div className="col-span-12"><input value={form.match} onChange={e => setForm({ ...form, match: e.target.value })} className="input-field text-[11px]" placeholder={activeBook.type === 'sports' ? "項目/對戰 (例: 快艇)" : "備註/局數"} /></div>
-            
             {activeBook.type === 'sports' ? (
               <>
                 <div className="col-span-6"><input value={form.market} onChange={e => setForm({ ...form, market: e.target.value })} className="input-field text-[11px]" placeholder="盤口" /></div>
@@ -345,9 +370,8 @@ const App = () => {
             ) : (
               <div className="col-span-12"><input type="number" step="0.01" value={form.units} onChange={e => setForm({ ...form, units: e.target.value })} className="input-field text-[11px] text-center bg-green-50/50 font-black" placeholder="贏輸注數 (負號為輸)" /></div>
             )}
-            
             <button type="submit" className={`col-span-12 py-3 rounded-xl text-white font-black text-xs shadow-md mt-1 ${isEditing ? 'bg-orange-500' : 'bg-blue-600'}`}>
-               {isEditing ? '更新內容' : '確認送出'}
+               {isEditing ? '更新內容' : '確認儲存至雲端'}
             </button>
           </form>
         </div>
@@ -365,23 +389,20 @@ const App = () => {
                   return (
                     <div key={r.id} className="bg-white px-2 py-1.5 rounded-xl shadow-sm border border-slate-50 flex items-center gap-2 relative overflow-hidden group">
                       <div className={`w-0.5 h-5 rounded-full shrink-0 ${activeBook.type === 'sports' && r.status === 'pending' ? 'bg-slate-100' : profit > 0 ? 'bg-green-500' : profit < 0 ? 'bg-red-500' : 'bg-orange-400'}`}></div>
-                      
                       <div className="flex-1 min-w-0">
                         <h3 className="text-[10px] font-black text-slate-700 truncate leading-tight">{r.match || '無標題'}</h3>
                         <div className="text-[7px] font-bold text-slate-400 tracking-tighter leading-none mt-0.5">
                           {activeBook.type === 'sports' ? `${r.odds} @ ${r.units}注 | ${r.market} ${r.gap}` : `${r.units}注`}
                         </div>
                       </div>
-
                       {activeBook.type === 'sports' && (
                         <div className="flex gap-0.5 shrink-0">
-                          <StatusBtn active={r.status==='win'} color="bg-green-500" icon={<Check size={10} strokeWidth={4}/>} onClick={()=>setRecords(prev=>prev.map(x=>x.id===r.id?{...x,status:'win'}:x))} />
-                          <StatusBtn active={r.status==='loss'} color="bg-red-500" icon={<X size={10} strokeWidth={4}/>} onClick={()=>setRecords(prev=>prev.map(x=>x.id===r.id?{...x,status:'loss'}:x))} />
-                          <StatusBtn active={r.status==='push'} color="bg-orange-400" icon={<span className="text-[7px] font-black">走</span>} onClick={()=>setRecords(prev=>prev.map(x=>x.id===r.id?{...x,status:'push'}:x))} />
-                          <StatusBtn active={r.status==='half'} color="bg-slate-700" icon={<span className="text-[7px] font-black">卡</span>} onClick={()=>setRecords(prev=>prev.map(x=>x.id===r.id?{...x,status:'half'}:x))} />
+                          <StatusBtn active={r.status==='win'} color="bg-green-500" icon={<Check size={10} strokeWidth={4}/>} onClick={()=>updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'records_'+activeBookId, r.id), {status:'win'})} />
+                          <StatusBtn active={r.status==='loss'} color="bg-red-500" icon={<X size={10} strokeWidth={4}/>} onClick={()=>updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'records_'+activeBookId, r.id), {status:'loss'})} />
+                          <StatusBtn active={r.status==='push'} color="bg-orange-400" icon={<span className="text-[7px] font-black">走</span>} onClick={()=>updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'records_'+activeBookId, r.id), {status:'push'})} />
+                          <StatusBtn active={r.status==='half'} color="bg-slate-700" icon={<span className="text-[7px] font-black">卡</span>} onClick={()=>updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'records_'+activeBookId, r.id), {status:'half'})} />
                         </div>
                       )}
-
                       <div className="text-right min-w-[55px]">
                         <div className={`text-[10px] font-black leading-tight ${profit > 0 ? 'text-green-500' : profit < 0 ? 'text-red-500' : 'text-slate-300'}`}>
                           {profit !== 0 ? (profit > 0 ? '+' : '') + Math.round(profit).toLocaleString() : '0'}
@@ -391,12 +412,11 @@ const App = () => {
                           <button onClick={() => setDeletingId(r.id)} className="text-slate-300 hover:text-red-500"><Trash2 size={8} /></button>
                         </div>
                       </div>
-
                       {deletingId === r.id && (
                         <div className="absolute inset-0 bg-white/95 z-20 flex items-center justify-center gap-2">
-                          <span className="text-[8px] font-black text-red-600">刪除？</span>
-                          <button onClick={() => { setRecords(prev => prev.filter(x => x.id !== r.id)); setDeletingId(null); }} className="bg-red-500 text-white px-2 py-0.5 rounded-lg text-[8px] font-black">確認</button>
-                          <button onClick={() => setDeletingId(null)} className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded-lg text-[8px] font-black">取消</button>
+                          <span className="text-[8px] font-black text-red-600 uppercase">Delete?</span>
+                          <button onClick={async () => { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'records_'+activeBookId, r.id)); setDeletingId(null); }} className="bg-red-500 text-white px-2 py-0.5 rounded-lg text-[8px] font-black">Confirm</button>
+                          <button onClick={() => setDeletingId(null)} className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded-lg text-[8px] font-black">Cancel</button>
                         </div>
                       )}
                     </div>
@@ -416,7 +436,7 @@ const App = () => {
       {isAddingBook && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md">
           <div className="bg-white w-full max-w-xs rounded-[2rem] p-8 shadow-2xl animate-in zoom-in-95 duration-200">
-            <h3 className="text-xl font-black mb-6 text-center text-slate-800">建立新帳簿</h3>
+            <h3 className="text-xl font-black mb-6 text-center text-slate-800 uppercase tracking-tighter">New Book</h3>
             <div className="space-y-4 mb-8">
               <input value={newBookForm.name} onChange={e => setNewBookForm({...newBookForm, name: e.target.value})} className="input-field" placeholder="名稱" />
               <div className="grid grid-cols-2 gap-2">
@@ -424,17 +444,15 @@ const App = () => {
                 <button onClick={() => setNewBookForm({...newBookForm, type: 'baccarat'})} className={`py-4 rounded-xl text-[10px] font-black transition-all ${newBookForm.type === 'baccarat' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400'}`}>百家樂</button>
               </div>
             </div>
-            <button onClick={() => {
-              if (!newBookForm.name) return;
-              const newBook = { id: `book-${Date.now()}`, name: newBookForm.name, type: newBookForm.type, unitAmount: '1000' };
-              const updatedBooks = [...books, newBook];
-              setBooks(updatedBooks);
-              localStorage.setItem('suite_v27_books', JSON.stringify(updatedBooks));
-              setActiveBookId(newBook.id);
+            <button onClick={async () => {
+              if (!newBookForm.name || !user) return;
+              const colRef = collection(db, 'artifacts', appId, 'users', user.uid, 'books');
+              const res = await addDoc(colRef, { name: newBookForm.name, type: newBookForm.type, unitAmount: '1000', createdAt: serverTimestamp() });
+              setActiveBookId(res.id);
               setNewBookForm({ name: '', type: 'sports' });
               setIsAddingBook(false);
               setIsMenuOpen(false);
-            }} className="w-full bg-slate-800 text-white py-4 rounded-xl font-black text-xs">立即建立</button>
+            }} className="w-full bg-slate-800 text-white py-4 rounded-xl font-black text-xs shadow-xl active:scale-95 transition-transform uppercase">Create Now</button>
             <button onClick={() => setIsAddingBook(false)} className="w-full text-slate-400 text-[10px] font-bold mt-4 text-center">取消</button>
           </div>
         </div>
@@ -464,3 +482,4 @@ const StatItem = ({ label, val, color }) => (
 );
 
 export default App;
+
