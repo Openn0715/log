@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全方位多功能紀錄系統V27_雲端版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+
+        // Firebase 配置 (此處會由系統自動注入金鑰，若在 GitHub 執行需確保環境變數或手動填入)
+        const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const appId = "v27-github-live";
+
+        window.fb = { db, auth, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, appId };
+    </script>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+        const { 
+            Trash2, Edit3, Plus, X, Check, Menu, FileText, ArrowLeft, TrendingUp, Save 
+        } = lucide;
+
+        // 這裡放原本的 React 邏輯 (簡化示意，完整內容請見下方說明)
+        function App() {
+            // ... (承接上一個回覆的 React 程式碼內容) ...
+            return (
+                <div className="p-4 text-center">
+                    <h1 className="font-bold">V27 雲端運作中</h1>
+                    <p>請將上方的 React 程式碼貼入此處的 App 組件內</p>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
