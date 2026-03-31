@@ -1,269 +1,511 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>全方位紀錄系統 V27</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, collection, doc, setDoc, onSnapshot, 
+  deleteDoc, updateDoc, addDoc 
+} from 'firebase/firestore';
+import { 
+  getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken 
+} from 'firebase/auth';
+import { 
+  Trash2, Edit3, Plus, X, Check, 
+  Menu, FileText, ArrowLeft, AlertTriangle, Settings2, Calendar
+} from 'lucide-react';
 
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
-        body { font-family: 'Noto Sans TC', sans-serif; background-color: #F8FAFC; -webkit-tap-highlight-color: transparent; }
-        .card { background: white; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); border: 1px solid #F1F5F9; }
-        .input-field { width: 100%; background: #F1F5F9; border: 2px solid transparent; border-radius: 12px; padding: 12px; font-weight: 700; color: #1E293B; outline: none; transition: all 0.2s; }
-        .input-field:focus { border-color: #3B82F6; background: white; }
-        .btn-status { width: 36px; height: 36px; border-radius: 10px; font-size: 11px; font-weight: 900; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-    </style>
-</head>
-<body>
-    <div id="root"></div>
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'sport-baccarat-pro-v24';
 
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+const App = () => {
+  const getLocalDate = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  };
 
-        const firebaseConfig = JSON.parse(window.__firebase_config || '{"apiKey":"","authDomain":"","projectId":"","storageBucket":"","messagingSenderId":"","appId":""}');
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'v27-final-stable';
-        const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+  const [user, setUser] = useState(null);
+  const [books, setBooks] = useState([]);
+  const [activeBookId, setActiveBookId] = useState('default');
+  const [records, setRecords] = useState([]);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+  
+  const [filter, setFilter] = useState('all');
+  const [dateRange, setDateRange] = useState({ start: getLocalDate(), end: getLocalDate() });
+  
+  const [isAddingBook, setIsAddingBook] = useState(false);
+  const [editingBook, setEditingBook] = useState(null);
+  const [bookForm, setBookForm] = useState({ name: '', unitAmount: 1000, type: '體育' });
 
-        let db, auth;
-        try {
-            const app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-        } catch (e) { console.error(e); }
+  const [isEditing, setIsEditing] = useState(false);
+  const [form, setForm] = useState({ 
+    date: getLocalDate(), match: '', market: '', gap: '', odds: '', 
+    units: 1, id: null, status: 'pending' 
+  });
 
-        window.FB_CORE = { db, auth, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, appId, signInAnonymously, onAuthStateChanged, signInWithCustomToken, initialToken };
-        window.dispatchEvent(new Event('fb-ready'));
-    </script>
+  const [deleteTargetId, setDeleteTargetId] = useState(null);
+  const [deleteType, setDeleteType] = useState('record'); 
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
-    <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
 
-        const Icon = ({ name, size = 18 }) => {
-            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
-            return <i data-lucide={name} style={{ width: size, height: size }}></i>;
-        };
+  useEffect(() => {
+    if (!user) return;
+    const booksCol = collection(db, 'artifacts', appId, 'users', user.uid, 'books');
+    const unsubBooks = onSnapshot(booksCol, (snapshot) => {
+      const bData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (bData.length === 0) {
+        setDoc(doc(booksCol, 'default'), { name: '我的體育帳簿', unitAmount: 1000, type: '體育', createdAt: Date.now() });
+      } else {
+        setBooks(bData.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)));
+        if (!activeBookId || !bData.find(b => b.id === activeBookId)) setActiveBookId(bData[0].id);
+      }
+    });
 
-        const App = () => {
-            const [user, setUser] = useState(null);
-            const [books, setBooks] = useState([]);
-            const [activeBookId, setActiveBookId] = useState(null);
-            const [records, setRecords] = useState([]);
-            const [isMenuOpen, setIsMenuOpen] = useState(false);
-            const [showReport, setShowReport] = useState(false);
+    const recordsCol = collection(db, 'artifacts', appId, 'users', user.uid, 'records');
+    const unsubRecords = onSnapshot(recordsCol, (snapshot) => {
+      setRecords(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => { unsubBooks(); unsubRecords(); };
+  }, [user, activeBookId]);
 
-            const getToday = () => new Date().toISOString().split('T')[0];
-            const [form, setForm] = useState({ date: getToday(), match: '', market: '', gap: '', odds: '', units: 1, status: 'pending' });
+  const activeBook = useMemo(() => 
+    books.find(b => b.id === activeBookId) || { name: '載入中...', unitAmount: 1000, type: '體育' }
+  , [books, activeBookId]);
 
-            // 初始化與登入
-            useEffect(() => {
-                const fb = window.FB_CORE;
-                if (!fb.auth) return;
-                const login = async () => {
-                    if (fb.initialToken) await fb.signInWithCustomToken(fb.auth, fb.initialToken);
-                    else await fb.signInAnonymously(fb.auth);
-                };
-                login();
-                return fb.onAuthStateChanged(fb.auth, (u) => setUser(u));
-            }, []);
+  const calculateProfit = (r, book) => {
+    const unitVal = parseFloat(book.unitAmount) || 0;
+    const units = parseFloat(r.units) || 0;
 
-            // 監聽帳簿
-            useEffect(() => {
-                if (!user) return;
-                const fb = window.FB_CORE;
-                const ref = fb.collection(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'books');
-                return fb.onSnapshot(ref, (snap) => {
-                    const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    setBooks(list);
-                    if (snap.empty) {
-                        fb.addDoc(ref, { name: '我的紀錄簿', type: 'sports', unitAmount: '1000' });
-                    } else if (!activeBookId) {
-                        setActiveBookId(list[0].id);
+    if (book.type === '百家') {
+      return units * unitVal;
+    }
+
+    if (!r.status || r.status === 'pending') return 0;
+    const odds = parseFloat(r.odds) || 0;
+    const betSize = units * unitVal;
+    
+    if (r.status === 'win') return betSize * (odds - 1);
+    if (r.status === 'loss') return -betSize;
+    if (r.status === 'push') return 0; 
+    if (r.status === 'half') {
+      const gVal = parseFloat(r.gap) || 0;
+      const factor = Math.abs(gVal) / 100;
+      return gVal > 0 ? (betSize * (odds - 1)) * factor : -betSize * factor;
+    }
+    return 0;
+  };
+
+  const filteredRecords = useMemo(() => {
+    return records.filter(r => {
+      if (r.bookId !== activeBookId) return false;
+      if (filter === 'today') return r.date === getLocalDate();
+      if (filter === 'month') return r.date.substring(0, 7) === getLocalDate().substring(0, 7);
+      if (filter === 'range') return r.date >= dateRange.start && r.date <= dateRange.end;
+      return true;
+    }).sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
+  }, [records, filter, activeBookId, dateRange]);
+
+  const groupedRecords = useMemo(() => {
+    return filteredRecords.reduce((acc, curr) => {
+      if (!acc[curr.date]) acc[curr.date] = [];
+      acc[curr.date].push(curr);
+      return acc;
+    }, {});
+  }, [filteredRecords]);
+
+  const stats = useMemo(() => {
+    const profit = filteredRecords.reduce((s, r) => s + calculateProfit(r, activeBook), 0);
+    const winCount = filteredRecords.filter(r => calculateProfit(r, activeBook) > 0).length;
+    const lossCount = filteredRecords.filter(r => calculateProfit(r, activeBook) < 0).length;
+    const total = filteredRecords.length;
+    const rate = (winCount + lossCount) > 0 ? ((winCount / (winCount + lossCount)) * 100).toFixed(1) : "0.0";
+    return { profit: Math.round(profit), win: winCount, loss: lossCount, rate, total };
+  }, [filteredRecords, activeBook]);
+
+  const reportDynamicSubtitle = useMemo(() => {
+    const typeLabel = activeBook.type === '百家' ? '百家報表' : '體育報表';
+    if (filter === 'today') return `今日 ${typeLabel}`;
+    if (filter === 'month') return `${getLocalDate().substring(0, 7)} ${typeLabel}`;
+    if (filter === 'range') return `${dateRange.start} 至 ${dateRange.end} ${typeLabel}`;
+    return `歷史所有紀錄 ${typeLabel}`;
+  }, [filter, dateRange, activeBook]);
+
+  const handleSaveBook = async () => {
+    if (!user || !bookForm.name) return;
+    const col = collection(db, 'artifacts', appId, 'users', user.uid, 'books');
+    if (editingBook) {
+      await updateDoc(doc(col, editingBook.id), { 
+        name: bookForm.name, 
+        unitAmount: parseFloat(bookForm.unitAmount) || 0,
+        type: bookForm.type
+      });
+    } else {
+      await addDoc(col, { 
+        name: bookForm.name, 
+        unitAmount: parseFloat(bookForm.unitAmount) || 0, 
+        type: bookForm.type,
+        createdAt: Date.now() 
+      });
+    }
+    setIsAddingBook(false);
+    setEditingBook(null);
+  };
+
+  const handleSaveRecord = async (e) => {
+    e.preventDefault();
+    if (!user) return;
+    const col = collection(db, 'artifacts', appId, 'users', user.uid, 'records');
+    let finalForm = { ...form, bookId: activeBookId };
+    if (activeBook.type === '百家') {
+      const u = parseFloat(form.units) || 0;
+      finalForm.status = u > 0 ? 'win' : (u < 0 ? 'loss' : 'push');
+      finalForm.match = `百家樂數據`;
+    }
+    const { id, ...data } = finalForm;
+    if (isEditing && id) {
+      await updateDoc(doc(col, id), data);
+    } else {
+      await addDoc(col, { ...data, createdAt: Date.now() });
+    }
+    setForm({ date: getLocalDate(), match: '', market: '', gap: '', odds: '', units: 1, id: null, status: 'pending' });
+    setIsEditing(false);
+  };
+
+  const updateStatus = async (id, status) => {
+    if (!user || !id) return;
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'records', id);
+    await updateDoc(docRef, { status });
+  };
+
+  const executeDelete = async () => {
+    if (!user || !deleteTargetId) return;
+    const path = deleteType === 'record' ? 'records' : 'books';
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, path, deleteTargetId));
+    if (deleteType === 'book' && deleteTargetId === activeBookId) {
+      const remaining = books.find(b => b.id !== deleteTargetId);
+      setActiveBookId(remaining?.id || 'default');
+    }
+    setIsDeleteModalOpen(false);
+    setDeleteTargetId(null);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F8FAFC] pb-24 font-sans select-none antialiased text-slate-800">
+      <header className="bg-white border-b sticky top-0 z-40 px-4 py-3 shadow-sm">
+        <div className="max-w-lg mx-auto flex justify-between items-center mb-3">
+          <button onClick={() => setIsMenuOpen(true)} className="p-2 text-slate-400 hover:text-slate-900 transition-colors"><Menu size={18} /></button>
+          <div className="text-center">
+            <div className="flex items-center justify-center gap-1">
+              <span className="bg-slate-900 text-white text-[5px] px-1 py-0.5 rounded-sm font-black scale-90">{activeBook.type}</span>
+              <h1 className="text-[10px] font-black tracking-widest text-slate-900 uppercase">{activeBook.name}</h1>
+            </div>
+            <div className="text-[7px] text-slate-300 font-bold mt-0.5 tracking-tighter">單注本金: NT$ {activeBook.unitAmount}</div>
+          </div>
+          <button onClick={() => setShowReport(true)} className="p-2 bg-slate-900 text-white rounded-lg shadow active:scale-95 transition-transform"><FileText size={14} /></button>
+        </div>
+        <div className="max-w-lg mx-auto grid grid-cols-4 gap-0.5">
+          <StatBox label="總獲利" val={stats.profit.toLocaleString()} color={stats.profit>=0?'text-green-500':'text-red-500'} />
+          <StatBox label="勝率" val={`${stats.rate}%`} />
+          <StatBox label="勝 / 負" val={<div className="flex gap-0.5"><span className="text-green-500">{stats.win}</span><span className="text-slate-200">/</span><span className="text-red-500">{stats.loss}</span></div>} />
+          <StatBox label="紀錄場數" val={stats.total} />
+        </div>
+      </header>
+
+      <main className="p-4 max-w-lg mx-auto">
+        <div className="flex flex-col gap-2 mb-4">
+          <div className="flex gap-1 bg-white p-1 rounded-xl border shadow-sm">
+            {['all', 'today', 'month', 'range'].map(f => (
+              <button key={f} onClick={() => setFilter(f)} className={`flex-1 py-1.5 rounded-lg text-[9px] font-black transition-all ${filter === f ? 'bg-slate-900 text-white' : 'text-slate-400'}`}>
+                {f==='all'?'全部':f==='today'?'今日':f==='month'?'本月':'自訂'}
+              </button>
+            ))}
+          </div>
+          {filter === 'range' && (
+            <div className="flex items-center gap-2 bg-white p-2 rounded-xl border animate-in slide-in-from-top-1">
+              <input type="date" value={dateRange.start} onChange={e=>setDateRange({...dateRange, start: e.target.value})} className="flex-1 text-[9px] font-black border-none bg-slate-50 p-2 rounded-lg outline-none" />
+              <span className="text-slate-300 text-[9px] font-black">至</span>
+              <input type="date" value={dateRange.end} onChange={e=>setDateRange({...dateRange, end: e.target.value})} className="flex-1 text-[9px] font-black border-none bg-slate-50 p-2 rounded-lg outline-none" />
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-100 p-4 mb-6 shadow-sm">
+          <form className="grid grid-cols-12 gap-3" onSubmit={handleSaveRecord}>
+            <div className="col-span-12 flex items-center gap-2 bg-slate-50 p-1 rounded-xl border">
+               <Calendar size={12} className="ml-2 text-slate-300" />
+               <input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})} className="w-full bg-transparent border-none font-black text-[11px] py-2 outline-none" />
+            </div>
+            
+            {activeBook.type === '體育' ? (
+              <>
+                <input value={form.match} onChange={e => setForm({...form, match: e.target.value})} className="col-span-8 input-style" placeholder="對戰隊伍..." required />
+                <input value={form.market} onChange={e => setForm({...form, market: e.target.value})} className="col-span-4 input-style" placeholder="盤口" />
+                <input type="number" step="0.01" value={form.odds} onChange={e => setForm({...form, odds: e.target.value})} className="col-span-4 input-style" placeholder="賠率" />
+                <input type="number" step="0.1" value={form.units} onChange={e => setForm({...form, units: e.target.value})} className="col-span-4 input-style" placeholder="注數" />
+                <input value={form.gap} onChange={e => setForm({...form, gap: e.target.value})} className="col-span-4 input-style" placeholder="比例%" />
+              </>
+            ) : (
+              <div className="col-span-12">
+                <input type="number" step="0.1" value={form.units} onChange={e => setForm({...form, units: e.target.value})} className="input-style !text-lg !py-4 text-center" placeholder="獲利注數 (贏:1, 輸:-1)" required />
+              </div>
+            )}
+
+            <button type="submit" className={`col-span-12 py-3.5 rounded-xl text-white font-black text-[11px] shadow-lg active:scale-95 transition-all ${isEditing ? 'bg-orange-500' : 'bg-blue-600'}`}>
+              {isEditing ? '更新內容' : `儲存${activeBook.type}紀錄`}
+            </button>
+          </form>
+        </div>
+
+        {Object.keys(groupedRecords).map(date => (
+          <div key={date} className="mb-6">
+            <div className="flex items-center gap-3 mb-3 px-2">
+              <span className="text-[9px] font-black text-slate-900 bg-slate-100 px-2 py-0.5 rounded uppercase tracking-wider">{date}</span>
+              <div className="h-[1px] flex-1 bg-slate-100"></div>
+            </div>
+            <div className="space-y-1.5">
+              {groupedRecords[date].map(r => {
+                const profit = calculateProfit(r, activeBook);
+                return (
+                  <div key={r.id} className="bg-white rounded-xl border border-slate-50 shadow-sm p-3 flex items-center gap-3">
+                    <div className={`w-1 h-6 rounded-full shrink-0 ${profit > 0 ? 'bg-green-500' : profit < 0 ? 'bg-red-500' : 'bg-slate-200'}`}></div>
+                    <div className="flex-1 flex items-center justify-between min-w-0">
+                      <div className="flex flex-col min-w-0 max-w-[45%]">
+                        <span className="text-[10px] font-black text-slate-800 truncate leading-tight">{activeBook.type === '百家' ? '百家樂帳' : r.match}</span>
+                        {activeBook.type === '體育' && (
+                          <div className="flex flex-col gap-0.5 mt-0.5">
+                            <div className="flex items-center gap-1">
+                              <span className="text-[7px] font-bold text-slate-400 bg-slate-50 px-1 rounded truncate">{r.market || '一般'}</span>
+                              <span className="text-[7px] font-bold text-blue-500 shrink-0">@{r.odds}</span>
+                              {r.status === 'half' && <span className="text-[7px] font-black text-orange-400">{r.gap}%</span>}
+                            </div>
+                            {/* 體育歷史紀錄注數顯示優化 */}
+                            <div className="text-[7px] font-bold text-slate-400">
+                              下注: <span className="text-slate-600">{r.units}</span> 注
+                            </div>
+                          </div>
+                        )}
+                        {activeBook.type === '百家' && <span className={`text-[7px] font-bold mt-1 ${profit>=0?'text-green-500':'text-red-500'}`}>損益: {r.units} 注數</span>}
+                      </div>
+                      
+                      <div className="flex gap-1 shrink-0 px-1">
+                        {activeBook.type === '體育' && (
+                          <>
+                            <StatusBtn active={r.status==='win'} onClick={()=>updateStatus(r.id, 'win')} color="bg-green-500" label="勝"/>
+                            <StatusBtn active={r.status==='loss'} onClick={()=>updateStatus(r.id, 'loss')} color="bg-red-500" label="負"/>
+                            <StatusBtn active={r.status==='push'} onClick={()=>updateStatus(r.id, 'push')} color="bg-slate-800" label="走"/>
+                            <StatusBtn active={r.status==='half'} onClick={()=>updateStatus(r.id, 'half')} color="bg-cyan-500" label="卡"/>
+                          </>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-2 ml-1">
+                        <div className={`text-[10px] font-black min-w-[50px] text-right ${profit > 0 ? 'text-green-500' : profit < 0 ? 'text-red-500' : 'text-slate-400'}`}>
+                          {profit > 0 ? '+' : ''}{Math.round(profit).toLocaleString()}
+                        </div>
+                        <div className="flex gap-0.5">
+                          <button onClick={() => { setForm(r); setIsEditing(true); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="p-1 text-slate-200 hover:text-slate-400"><Edit3 size={11}/></button>
+                          <button onClick={() => { setDeleteTargetId(r.id); setDeleteType('record'); setIsDeleteModalOpen(true); }} className="p-1 text-slate-200 hover:text-red-300"><Trash2 size={11}/></button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </main>
+
+      {showReport && (
+        <div className="fixed inset-0 bg-[#F8FAFC] z-[50] overflow-y-auto">
+          <div className="max-w-lg mx-auto p-5 pb-24">
+            <button onClick={() => setShowReport(false)} className="flex items-center gap-2 text-slate-400 font-black mb-6 text-[9px] active:opacity-50"><ArrowLeft size={12}/> 返回列表</button>
+            
+            <div className="bg-slate-900 text-white rounded-[1.5rem] p-6 mb-8 shadow-2xl text-center relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 blur-2xl"></div>
+              
+              <h2 className="text-xl font-black tracking-widest mb-1 uppercase">{activeBook.name}</h2>
+              <div className="text-[10px] font-black text-blue-400/80 mb-8 uppercase tracking-widest">
+                {reportDynamicSubtitle}
+              </div>
+              
+              <div className="grid grid-cols-4 gap-1 border-t border-white/10 pt-8">
+                <ReportCell label="累計獲利" val={stats.profit.toLocaleString()} color={stats.profit>=0?'text-green-400':'text-red-400'} />
+                <ReportCell label="平均勝率" val={`${stats.rate}%`} color="text-blue-300" />
+                <ReportCell 
+                  label="勝 / 負" 
+                  val={
+                    <div className="flex items-center justify-center gap-1">
+                      <span className="text-green-400">{stats.win}</span>
+                      <span className="opacity-20">/</span>
+                      <span className="text-red-400">{stats.loss}</span>
+                    </div>
+                  } 
+                />
+                <ReportCell label="總場次" val={stats.total} />
+              </div>
+            </div>
+            
+            <div className="px-1">
+              <div className="flex text-[8px] font-black text-slate-300 px-4 mb-4 tracking-widest pb-2 border-b">
+                <div className="flex-[3]">{activeBook.type === '百家' ? '日期' : '賽事內容'}</div>
+                {activeBook.type === '體育' && <div className="flex-[1] text-center">賠率/注數</div>}
+                {activeBook.type === '體育' && <div className="flex-[1.5] text-center">結果描述</div>}
+                <div className="flex-[1.5] text-right">獲利金額</div>
+              </div>
+              <div className="space-y-1">
+                {filteredRecords.map(r => {
+                  const p = calculateProfit(r, activeBook);
+                  let resultStr = "-";
+                  if (activeBook.type === '體育') {
+                    if (r.status === 'win') resultStr = "全勝";
+                    else if (r.status === 'loss') resultStr = "全敗";
+                    else if (r.status === 'push') resultStr = "走水";
+                    else if (r.status === 'half') {
+                      const gapVal = parseFloat(r.gap) || 0;
+                      resultStr = gapVal >= 0 ? `贏 ${gapVal}%` : `輸 ${Math.abs(gapVal)}%`;
                     }
-                });
-            }, [user]);
+                  } else {
+                    resultStr = p >= 0 ? "贏" : "輸";
+                  }
 
-            // 監聽紀錄
-            useEffect(() => {
-                if (!user || !activeBookId) return;
-                const fb = window.FB_CORE;
-                const ref = fb.collection(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'records_' + activeBookId);
-                return fb.onSnapshot(ref, (snap) => {
-                    setRecords(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                });
-            }, [user, activeBookId]);
-
-            const activeBook = useMemo(() => books.find(b => b.id === activeBookId) || { name: '帳簿連線中', unitAmount: '1000' }, [books, activeBookId]);
-
-            const calcPL = (r) => {
-                const unit = parseFloat(activeBook.unitAmount) || 0;
-                const uCount = parseFloat(r.units) || 0;
-                if (r.status === 'pending' || r.status === 'push') return 0;
-                const odds = parseFloat(r.odds) || 0;
-                const bet = uCount * unit;
-                if (r.status === 'win') return bet * (odds - 1);
-                if (r.status === 'loss') return -bet;
-                if (r.status === 'half') {
-                    const isWinHalf = r.gap?.includes('+') || parseFloat(r.gap) > 0;
-                    return isWinHalf ? (bet * (odds - 1)) * 0.5 : -(bet * 0.5);
-                }
-                return 0;
-            };
-
-            const stats = useMemo(() => {
-                const total = records.reduce((s, r) => s + calcPL(r), 0);
-                const wins = records.filter(r => calcPL(r) > 0).length;
-                const rate = records.length ? (wins / records.length * 100).toFixed(1) : 0;
-                return { total, rate, count: records.length, list: [...records].sort((a,b)=>b.date.localeCompare(a.date)) };
-            }, [records, activeBook]);
-
-            const submit = async (e) => {
-                e.preventDefault();
-                const fb = window.FB_CORE;
-                await fb.addDoc(fb.collection(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'records_' + activeBookId), { ...form, createdAt: fb.serverTimestamp() });
-                setForm({ date: getToday(), match: '', market: '', gap: '', odds: '', units: 1, status: 'pending' });
-            };
-
-            return (
-                <div className="max-w-md mx-auto min-h-screen flex flex-col pb-20">
-                    <header className="bg-white/80 backdrop-blur-md sticky top-0 z-50 p-4 border-b flex justify-between items-center">
-                        <button onClick={() => setIsMenuOpen(true)} className="p-2 text-slate-400"><Icon name="menu"/></button>
-                        <div className="text-center">
-                            <div className="text-xs font-black text-slate-800">{activeBook.name}</div>
-                            <div className="text-[8px] font-bold text-blue-500 uppercase">V27 Professional</div>
+                  return (
+                    <div key={`rep-${r.id}`} className="flex items-center bg-white border border-slate-50 px-4 py-4 rounded-xl mb-1 shadow-sm">
+                      <div className="flex-[3] text-[10px] font-black text-slate-800">{activeBook.type === '百家' ? r.date : r.match}</div>
+                      {activeBook.type === '體育' && (
+                        <div className="flex-[1] text-center flex flex-col">
+                          <span className="text-[9px] font-bold text-slate-400">@{r.odds}</span>
+                          <span className="text-[7px] font-black text-slate-300">{r.units} 注</span>
                         </div>
-                        <button onClick={() => setShowReport(true)} className="p-2 text-slate-800"><Icon name="bar-chart-2"/></button>
-                    </header>
-
-                    <main className="p-4 space-y-4">
-                        <div className="grid grid-cols-3 gap-2">
-                            <div className="card p-4 text-center">
-                                <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">盈虧</div>
-                                <div className={`text-sm font-black ${stats.total >= 0 ? 'text-green-500' : 'text-red-500'}`}>{Math.round(stats.total).toLocaleString()}</div>
-                            </div>
-                            <div className="card p-4 text-center">
-                                <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">勝率</div>
-                                <div className="text-sm font-black text-blue-600">{stats.rate}%</div>
-                            </div>
-                            <div className="card p-4 text-center">
-                                <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">總計</div>
-                                <div className="text-sm font-black text-slate-800">{stats.count}</div>
-                            </div>
+                      )}
+                      {activeBook.type === '體育' && (
+                        <div className={`flex-[1.5] text-center text-[9px] font-black ${p>0?'text-green-500':p<0?'text-red-500':'text-slate-300'}`}>
+                          {resultStr}
                         </div>
+                      )}
+                      <div className={`flex-[1.5] text-right text-[10px] font-black ${p>0?'text-green-500':p<0?'text-red-500':'text-slate-400'}`}>{p > 0 ? '+' : ''}{Math.round(p).toLocaleString()}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
-                        <div className="bg-slate-900 p-5 rounded-[2rem] flex justify-between items-center text-white shadow-xl">
-                            <span className="font-black text-xs">單位價值：</span>
-                            <div className="bg-white/10 px-4 py-2 rounded-xl flex items-center border border-white/20">
-                                <span className="text-[10px] opacity-40 mr-2">$</span>
-                                <input type="number" value={activeBook.unitAmount} onChange={async (e) => {
-                                    const fb = window.FB_CORE;
-                                    await fb.updateDoc(fb.doc(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'books', activeBookId), { unitAmount: e.target.value });
-                                }} className="bg-transparent w-20 text-right font-black outline-none" />
-                            </div>
-                        </div>
+      {/* 帳簿管理 */}
+      {isMenuOpen && <div className="fixed inset-0 bg-slate-900/60 z-[60] backdrop-blur-sm" onClick={() => setIsMenuOpen(false)}></div>}
+      <aside className={`fixed top-0 left-0 h-full w-64 bg-white z-[70] shadow-2xl transition-transform duration-300 flex flex-col ${isMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="p-6 border-b flex justify-between items-center bg-slate-50/50">
+          <span className="font-black text-[10px] text-slate-400 uppercase">我的帳簿列表</span>
+          <button onClick={() => { setBookForm({name:'', unitAmount:1000, type: '體育'}); setEditingBook(null); setIsAddingBook(true); }} className="p-2 bg-slate-900 text-white rounded-lg"><Plus size={14}/></button>
+        </div>
+        <div className="p-3 space-y-2 overflow-y-auto flex-1">
+          {books.map(b => (
+            <div key={b.id} onClick={() => { setActiveBookId(b.id); setIsMenuOpen(false); }} className={`p-4 rounded-xl border-2 transition-all cursor-pointer relative group ${activeBookId === b.id ? 'border-blue-600 bg-blue-50/20' : 'border-transparent bg-slate-50'}`}>
+              <div className="flex items-center gap-1.5 mb-1">
+                 <span className="bg-slate-200 text-slate-500 text-[5px] px-1 py-0.5 rounded-sm font-black uppercase">{b.type}</span>
+                 <div className="font-black text-[10px] truncate text-slate-800 flex-1 pr-10">{b.name}</div>
+              </div>
+              <div className="text-[7px] font-bold text-slate-300">單注換算: NT$ {b.unitAmount}</div>
+              <div className="absolute top-4 right-3 flex gap-1 opacity-20 group-hover:opacity-100">
+                <button onClick={(e) => { e.stopPropagation(); setEditingBook(b); setBookForm({name:b.name, unitAmount:b.unitAmount, type: b.type}); setIsAddingBook(true); }} className="p-1 text-slate-400 hover:text-blue-600"><Settings2 size={12}/></button>
+                <button onClick={(e) => { e.stopPropagation(); setDeleteTargetId(b.id); setDeleteType('book'); setIsDeleteModalOpen(true); }} className="p-1 text-slate-400 hover:text-red-500"><Trash2 size={12}/></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </aside>
 
-                        <div className="card p-6 space-y-3">
-                            <input type="date" value={form.date} onChange={e=>setForm({...form, date:e.target.value})} className="input-field" />
-                            <input placeholder="比賽名稱 / 隊伍" value={form.match} onChange={e=>setForm({...form, match:e.target.value})} className="input-field" required />
-                            <div className="grid grid-cols-2 gap-2">
-                                <input placeholder="盤口" value={form.market} onChange={e=>setForm({...form, market:e.target.value})} className="input-field" />
-                                <input placeholder="分洞 (+贏半)" value={form.gap} onChange={e=>setForm({...form, gap:e.target.value})} className="input-field" />
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                                <input type="number" step="0.001" placeholder="賠率" value={form.odds} onChange={e=>setForm({...form, odds:e.target.value})} className="input-field" required />
-                                <input type="number" step="0.1" placeholder="注數" value={form.units} onChange={e=>setForm({...form, units:e.target.value})} className="input-field" required />
-                            </div>
-                            <button onClick={submit} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-lg">儲存至雲端</button>
-                        </div>
+      {/* 新增/編輯帳簿彈窗 */}
+      {isAddingBook && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/80 backdrop-blur-md">
+          <div className="bg-white w-full max-w-xs rounded-[1.5rem] p-8 shadow-2xl animate-in zoom-in-95 text-center">
+            <h3 className="font-black text-[11px] mb-6 text-slate-800 uppercase tracking-widest">{editingBook ? '修改帳簿設定' : '新增帳簿分類'}</h3>
+            <div className="space-y-4">
+              <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+                {['體育', '百家'].map(t => (
+                  <button key={t} onClick={() => setBookForm({...bookForm, type: t})} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${bookForm.type === t ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}>{t}</button>
+                ))}
+              </div>
+              <div className="text-left space-y-1">
+                <label className="text-[8px] font-black text-slate-300 ml-1">帳簿顯示名稱</label>
+                <input value={bookForm.name} onChange={e => setBookForm({...bookForm, name: e.target.value})} className="input-style" placeholder="輸入名稱..." />
+              </div>
+              <div className="text-left space-y-1">
+                <label className="text-[8px] font-black text-slate-300 ml-1">單注本金金額</label>
+                <input type="number" value={bookForm.unitAmount} onChange={e => setBookForm({...bookForm, unitAmount: e.target.value})} className="input-style" placeholder="例: 1000" />
+              </div>
+              <button onClick={handleSaveBook} className="w-full bg-slate-900 text-white py-3.5 rounded-xl font-black text-[10px] mt-4 shadow-xl active:scale-95 transition-transform">儲存資訊</button>
+              <button onClick={() => setIsAddingBook(false)} className="w-full text-slate-400 text-[9px] font-black py-2 tracking-widest uppercase">返回</button>
+            </div>
+          </div>
+        </div>
+      )}
 
-                        <div className="space-y-2">
-                            {stats.list.map(r => (
-                                <div key={r.id} className="card p-4 flex items-center justify-between group">
-                                    <div className="flex-1">
-                                        <div className="text-xs font-black text-slate-800">{r.match}</div>
-                                        <div className="text-[9px] font-bold text-slate-400">{r.date} | {r.market} @{r.odds}</div>
-                                    </div>
-                                    <div className="flex gap-1 mr-4">
-                                        {['win', 'loss', 'push', 'half'].map(st => (
-                                            <button key={st} onClick={async () => {
-                                                const fb = window.FB_CORE;
-                                                await fb.updateDoc(fb.doc(fb.db, 'artifacts', fb.appId, 'users', user.uid, 'records_'+activeBookId, r.id), { status: st });
-                                            }} className={`btn-status ${r.status === st ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-300'}`}>
-                                                {st === 'win' ? '贏' : st === 'loss' ? '輸' : st === 'push' ? '走' : '半'}
-                                            </button>
-                                        ))}
-                                    </div>
-                                    <div className={`text-right font-black text-xs min-w-[50px] ${calcPL(r) > 0 ? 'text-green-500' : calcPL(r) < 0 ? 'text-red-500' : 'text-slate-300'}`}>
-                                        {Math.round(calcPL(r)).toLocaleString()}
-                                    </div>
-                                    <button onClick={async () => { if(confirm("刪除？")) await window.FB_CORE.deleteDoc(window.FB_CORE.doc(window.FB_CORE.db, 'artifacts', window.FB_CORE.appId, 'users', user.uid, 'records_'+activeBookId, r.id)); }} className="ml-2 text-slate-200 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="trash-2" size={14}/></button>
-                                </div>
-                            ))}
-                        </div>
-                    </main>
+      {/* 刪除確認 */}
+      {isDeleteModalOpen && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md">
+          <div className="bg-white w-full max-w-xs rounded-[1.5rem] p-8 shadow-2xl text-center">
+            <div className="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle className="text-red-500" size={20} />
+            </div>
+            <h3 className="font-black text-[13px] mb-2">確定刪除資料？</h3>
+            <p className="text-[9px] text-slate-400 mb-8 leading-relaxed">此操作無法復原，請確認是否繼續。</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={executeDelete} className="w-full bg-red-500 text-white py-3.5 rounded-xl font-black text-[9px] tracking-widest active:scale-95 transition-transform">刪除</button>
+              <button onClick={() => setIsDeleteModalOpen(false)} className="w-full text-slate-300 text-[9px] font-black py-2 uppercase">取消</button>
+            </div>
+          </div>
+        </div>
+      )}
 
-                    {/* 側選單 */}
-                    {isMenuOpen && (
-                        <div className="fixed inset-0 bg-black/50 z-[100] flex" onClick={()=>setIsMenuOpen(false)}>
-                            <div className="bg-white w-64 h-full p-6 flex flex-col" onClick={e=>e.stopPropagation()}>
-                                <h2 className="font-black text-lg mb-6 flex items-center gap-2"><Icon name="book" className="text-blue-600"/> 帳簿清單</h2>
-                                <div className="space-y-2 flex-1 overflow-y-auto no-scrollbar">
-                                    {books.map(b => (
-                                        <div key={b.id} onClick={() => { setActiveBookId(b.id); setIsMenuOpen(false); }} className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${activeBookId === b.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-transparent bg-slate-50 text-slate-400'}`}>
-                                            <div className="font-black text-sm">{b.name}</div>
-                                        </div>
-                                    ))}
-                                </div>
-                                <div className="pt-4 border-t text-[8px] font-bold text-slate-300">UID: {user?.uid}</div>
-                            </div>
-                        </div>
-                    )}
+      <style>{`
+        .input-style { width: 100%; background: #F8FAFC; border: 1.5px solid #F1F5F9; border-radius: 10px; font-weight: 800; font-size: 10px; color: #1E293B; outline: none; padding: 10px 12px; transition: all 0.2s; }
+        .input-style:focus { border-color: #3B82F6; background: white; }
+        @keyframes slide-in-from-top-1 { from { transform: translateY(-4px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+      `}</style>
+    </div>
+  );
+};
 
-                    {/* 報表介面 */}
-                    {showReport && (
-                        <div className="fixed inset-0 bg-white z-[100] p-6 overflow-y-auto">
-                            <button onClick={()=>setShowReport(false)} className="mb-6 flex items-center gap-2 text-slate-400 font-bold"><Icon name="arrow-left"/> 返回</button>
-                            <div className="bg-slate-900 text-white p-8 rounded-[2rem] shadow-xl mb-6">
-                                <div className="text-[10px] text-blue-400 font-black uppercase mb-2">Total Performance</div>
-                                <div className="text-3xl font-black mb-6">${Math.round(stats.total).toLocaleString()}</div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="bg-white/5 p-4 rounded-2xl">
-                                        <div className="text-[8px] opacity-40 mb-1">WIN RATE</div>
-                                        <div className="font-black text-yellow-400">{stats.rate}%</div>
-                                    </div>
-                                    <div className="bg-white/5 p-4 rounded-2xl">
-                                        <div className="text-[8px] opacity-40 mb-1">GAMES</div>
-                                        <div className="font-black">{stats.count}</div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="space-y-2">
-                                {stats.list.map(r => (
-                                    <div key={r.id} className="flex justify-between items-center py-3 border-b">
-                                        <div>
-                                            <div className="text-xs font-black text-slate-800">{r.match}</div>
-                                            <div className="text-[8px] text-slate-400 uppercase">{r.date}</div>
-                                        </div>
-                                        <div className={`text-xs font-black ${calcPL(r) >= 0 ? 'text-green-600' : 'text-red-600'}`}>{Math.round(calcPL(r)).toLocaleString()}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            );
-        };
+const StatBox = ({ label, val, color }) => (
+  <div className="bg-white p-2 rounded-lg flex flex-col items-center flex-1 border border-slate-50 shadow-sm">
+    <div className="text-[6px] text-slate-300 font-black mb-1 uppercase tracking-tighter">{label}</div>
+    <div className={`text-[9px] font-black font-mono ${color || 'text-slate-900'}`}>{val}</div>
+  </div>
+);
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+const ReportCell = ({ label, val, color }) => (
+  <div className="flex flex-col items-center">
+    <div className="text-[7px] font-black opacity-30 uppercase mb-2 tracking-widest">{label}</div>
+    <div className={`text-sm font-black font-mono ${color || 'text-white'}`}>{val}</div>
+  </div>
+);
+
+const StatusBtn = ({ active, onClick, color, label }) => (
+  <button 
+    type="button"
+    onClick={(e) => {
+      e.preventDefault(); e.stopPropagation(); onClick();
+    }} 
+    className={`w-6 h-6 rounded-md flex items-center justify-center transition-all border ${active ? `${color} text-white border-transparent shadow-sm scale-110` : 'bg-white text-slate-200 border-slate-50'}`}>
+    <span className="text-[8px] font-black pointer-events-none">{label}</span>
+  </button>
+);
+
+export default App;
 
